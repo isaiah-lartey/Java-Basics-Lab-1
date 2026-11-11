@@ -9,7 +9,10 @@ the first code change.
 
 ## Running it
 
-Plain Java, JDK 21, no dependencies. From the repository root, in PowerShell:
+Plain Java, JDK 21, no dependencies. Check your version first: `java -version` should report 21
+or newer. `target/` is git-ignored, so build output is never committed.
+
+From the repository root, in PowerShell:
 
 ```powershell
 Remove-Item -Recurse -Force target/classes -ErrorAction SilentlyContinue
@@ -31,7 +34,7 @@ separate package, `com.amalitech.dovewing.app`, on purpose (see "Encapsulation" 
 
 | Class                        | Job                                                                                                                                                     |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Depot`                      | The only class that can change rental state. It sees vehicles, renters and rentals together, so it is the only place the rules can be enforced.         |
+| `Depot`                      | The only class that can change rental state, so the "never both" rule lives in one place (see "Why `Depot` stays one class").                           |
 | `Vehicle`                    | A record. Plate, model, rate, deposit and a `Category`. The compact constructor rejects missing values, a rate of zero or less, and a negative deposit. |
 | `Renter`                     | A record. Id, name and a `RenterType` enum, validated in the compact constructor.                                                                       |
 | `Rental`                     | Immutable except for its status. The only mutator, `markReturned()`, is package-private, so code outside the package cannot call it.                    |
@@ -51,9 +54,15 @@ it carefully, because a stored field can always be forgotten or bypassed.
 
 **`Depot` is the only gatekeeper.** `rent` checks the vehicle, the renter, whether the car is
 already out and the number of days **before** changing anything, and refuses if a check fails.
-`returnVehicle` refuses a car that is not out. A failed call changes nothing. Every public method
-of `Depot` is `synchronized`, so the check "is it already out?" and the change that follows cannot be
-split by another thread.
+`returnVehicle` refuses a car that is not out. A failed call changes nothing.
+
+**Why `Depot` stays one class.** It holds the fleet, renters and rentals together on purpose. The
+rule "a car is out if and only if an active rental exists" needs all three to be checked and changed
+in one place. Splitting them into a fleet registry and a rental service would spread that check
+across classes again, which is how the original ended up with a car both available and rented.
+Pricing and deposit rules are not in `Depot`; they live in `Category`, so `Depot` does not grow
+when a vehicle class is added. `Depot` is not thread-safe, which is fine because the tool runs on
+one thread; locking would need to be added before sharing it between threads.
 
 **Refusals are a checked exception.** A car already being out, an unknown plate or a bad number of
 days are expected events at the counter that the caller can recover from, so `rent` and
@@ -63,11 +72,12 @@ only `RentalRefusedException`, not `RuntimeException`, so a real bug is not hidd
 friendly message.
 
 **Encapsulation.** Every field is private and final where it can be. `getRentals()` already
-existed in the original and returned the real internal list. It stays, so no feature is lost,
-but it now returns `List.copyOf(...)`, a snapshot. Callers cannot add or remove rentals through
-it, and `Rental` has no public mutators. `Main` is in a different package from the domain classes
-on purpose: the package-private `markReturned()` and `Ledger.record()` really are out of its
-reach (Java does not allow calls to package-private methods from another package).
+existed in the original and returned the real internal list. It stays, so no feature is lost
+(nothing in this program calls it; it is kept as the original public accessor), but it now returns
+`List.copyOf(...)`, a snapshot. Callers cannot add or remove rentals through it, and `Rental` has
+no public mutators. `Main` is in a different package from the domain classes on purpose: the
+package-private `markReturned()` and `Ledger.record()` really are out of its reach (Java does not
+allow calls to package-private methods from another package).
 
 **Presentation at the edge.** `Depot` no longer prints. It exposes read-only views (`fleet()`,
 `activeRentals()`, `findRenter(id)`, `isRented(plate)`), and `app.Report` does the printing, so
@@ -102,7 +112,8 @@ public final class CommercialVan implements Category {
 
 `Depot.rent` already calls `category.cost(...)` and `category.deposit(...)`, so it prices the van
 without knowing the van exists. A van cannot be added without implementing both
-rules, because the compiler enforces the interface.
+rules, because the compiler enforces the interface. To put a van in the fleet, `Main` creates
+`new Vehicle(..., new CommercialVan())`, the same way it creates the Vitz and the Prado.
 
 **What the old version would have forced:** a third copy-pasted `else if (v.category.equals("VAN"))`
 branch inside `rent`, with its own copy of the deposit logic. The shared lines under the branches
@@ -120,16 +131,18 @@ I changed these things, and why:
 - `Main` moved to its own package, so the package-private methods cannot be called from it.
 - Refusals use a checked `RentalRefusedException`, which the sketch only described as "throws".
 - `Vehicle` and `Renter` became records.
-- `Depot` gained read-only views (`fleet()`, `activeRentals()`, `findRenter()`) for `Report`, and
-  its public methods are `synchronized`.
+- `Depot` gained read-only views (`fleet()`, `activeRentals()`, `findRenter()`) for `Report`.
 
 ### Known limits
 
-- Rentals and ledger entries are kept in memory and only ever grow. That is fine at one depot's
-  volume, but a long-lived tool would need to archive old rentals.
+- Rentals and ledger entries are kept in memory and only ever grow, and they are lost when the
+  program exits, as in the original. That is fine at one depot's volume. The intended next step is
+  to persist them to a file or small database through a storage interface that `Depot` calls after
+  each successful change, and to archive old rentals there.
 - `Vehicle` is a record, so its `equals` compares the `Category` object, and `Economy` has no
-  `equals`. Vehicles are never compared or used as map keys (the fleet is keyed by plate), so this
-  has no effect today.
+  `equals`. Vehicles are never compared or used as map keys (the fleet is keyed by plate), so
+  equality is never needed. It is deliberately left as it is rather than adding `equals` to every
+  category.
 
 ### Trade-off I accepted
 
@@ -141,8 +154,9 @@ which is the original problem (a premium tweak breaking economy).
 ## Behaviour preservation
 
 The baseline output was captured from the original program before any change
-(`baseline-output.txt`). The rebuilt `Main` produces the same report, with these **intended
-differences** (also listed in DIAGNOSIS.md, section 4):
+([baseline-output.txt](baseline-output.txt)). The rebuilt `Main` produces the same report, with
+these **intended differences** (also listed in DIAGNOSIS.md, section 4). There are no automated
+tests in this repository; the evidence is the output comparison below.
 
 1. The demo's last rent (the Vitz is already out with Kofi) is refused. `Main` prints the message
    `Vehicle already rented: GT-1234-20`, and Rental #3 no longer appears in the report.
@@ -161,7 +175,7 @@ differences** (also listed in DIAGNOSIS.md, section 4):
 
 ### Evidence
 
-Original (`baseline-output.txt`):
+Original (full output in [baseline-output.txt](baseline-output.txt)):
 
 ```text
 Rented Toyota Vitz (GT-1234-20) to Kofi Mensah for 3 days, cost GHS 450.0, deposit GHS 500.0
@@ -210,10 +224,11 @@ take a car that was already out, or why it was refused.
 
 **The check:** `Ledger.report(...)` compares its own records with the live rentals. The number of
 `RENT` lines must equal the total number of rentals, and the number of `RETURN` lines must equal
-the number of returned rentals. If not, it throws `IllegalStateException`. So if anything ever
-changes a rental without going through `Depot`, the tool fails loudly instead of showing a
-screen that quietly lies, which is the failure this depot already suffered from.
+the number of returned rentals. If not, it throws `IllegalStateException`. So if the two ever
+disagree, for example after a future change updates a rental without recording it, the tool fails
+loudly instead of printing a report that quietly lies, which is the failure this depot already
+suffered from.
 
 Events are stored as typed entries (`RENT`, `RETURN`, `REFUSE`), and the check counts them by type,
 not by searching text. It is plain Java with no framework, `record(...)` is package-private so code
-outside the package cannot write to it, and `entries()` returns an unmodifiable copy.
+outside the package cannot write to it, and `entries()` returns an unmodifiable list.
