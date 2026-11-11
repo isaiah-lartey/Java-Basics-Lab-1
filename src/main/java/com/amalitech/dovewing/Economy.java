@@ -11,9 +11,12 @@ public final class Economy implements Category {
 
     @Override
     public BigDecimal deposit(BigDecimal baseDeposit, RenterType renterType) {
-        if (renterType == RenterType.MEMBER) {
-            return BigDecimal.ZERO;
-        }
+        if (renterType == RenterType.MEMBER) return BigDecimal.ZERO;
         return baseDeposit;
+    }
+
+    @Override
+    public String name() {
+        return "ECONOMY";
     }
 }
