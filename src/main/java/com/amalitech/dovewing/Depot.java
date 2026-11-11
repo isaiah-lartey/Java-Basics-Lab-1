@@ -5,11 +5,11 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 /**
- * The only class that changes rental state. Every public method takes the same lock, so the
- * check "is it already rented?" and the change that follows cannot be split by another thread.
+ * The only class that changes rental state. It sees the fleet, renters and rentals together, so
+ * it is the one place that checks "is it already rented?" before changing anything. It is not
+ * thread-safe; use it from one thread or add locking before sharing it.
  */
 public final class Depot {
 
@@ -19,7 +19,7 @@ public final class Depot {
     private final Ledger ledger = new Ledger();
     private int nextRentalId = 1;
 
-    public synchronized void addVehicle(Vehicle v) {
+    public void addVehicle(Vehicle v) {
         String key = v.key();
         if (fleet.containsKey(key)) {
             throw new IllegalArgumentException("Duplicate plate: " + v.plate());
@@ -27,14 +27,14 @@ public final class Depot {
         fleet.put(key, v);
     }
 
-    public synchronized void addRenter(Renter r) {
+    public void addRenter(Renter r) {
         if (renters.containsKey(r.id())) {
             throw new IllegalArgumentException("Duplicate renter id: " + r.id());
         }
         renters.put(r.id(), r);
     }
 
-    public synchronized Rental rent(int renterId, String plate, int days) throws RentalRefusedException {
+    public Rental rent(int renterId, String plate, int days) throws RentalRefusedException {
         String key = Vehicle.normalise(plate);
 
         Vehicle v = fleet.get(key);
@@ -64,7 +64,7 @@ public final class Depot {
         return rental;
     }
 
-    public synchronized void returnVehicle(String plate) throws RentalRefusedException {
+    public void returnVehicle(String plate) throws RentalRefusedException {
         String key = Vehicle.normalise(plate);
 
         Vehicle v = fleet.get(key);
@@ -72,10 +72,13 @@ public final class Depot {
             throw refuse(key, "unknown vehicle", "Unknown vehicle: " + plate);
         }
 
-        Rental active = rentals.stream()
-            .filter(x -> x.status() == RentalStatus.ACTIVE && Vehicle.normalise(x.plate()).equals(key))
-            .findFirst()
-            .orElse(null);
+        Rental active = null;
+        for (Rental x : rentals) {
+            if (x.status() == RentalStatus.ACTIVE && Vehicle.normalise(x.plate()).equals(key)) {
+                active = x;
+                break;
+            }
+        }
 
         if (active == null) {
             throw refuse(key, "not rented", "Vehicle not rented: " + v.plate());
@@ -85,23 +88,34 @@ public final class Depot {
         ledger.record(Ledger.Type.RETURN, "plate=" + key);
     }
 
-    public synchronized boolean isRented(String plate) {
+    public boolean isRented(String plate) {
         String key = Vehicle.normalise(plate);
-        return rentals.stream()
-            .anyMatch(x -> x.status() == RentalStatus.ACTIVE && Vehicle.normalise(x.plate()).equals(key));
+        for (Rental x : rentals) {
+            if (x.status() == RentalStatus.ACTIVE && Vehicle.normalise(x.plate()).equals(key)) {
+                return true;
+            }
+        }
+        return false;
     }
 
-    public synchronized List<Rental> getRentals() { return List.copyOf(rentals); }
+    public List<Rental> getRentals() { return List.copyOf(rentals); }
 
-    public synchronized List<Rental> activeRentals() {
-        return rentals.stream().filter(x -> x.status() == RentalStatus.ACTIVE).toList();
+    public List<Rental> activeRentals() {
+        List<Rental> active = new ArrayList<>();
+        for (Rental x : rentals) {
+            if (x.status() == RentalStatus.ACTIVE) {
+                active.add(x);
+            }
+        }
+        return active;
     }
 
-    public synchronized List<Vehicle> fleet() { return List.copyOf(fleet.values()); }
+    public List<Vehicle> fleet() { return List.copyOf(fleet.values()); }
 
-    public synchronized Optional<Renter> findRenter(int id) { return Optional.ofNullable(renters.get(id)); }
+    /** Returns the renter with this id, or null if there is none. */
+    public Renter findRenter(int id) { return renters.get(id); }
 
-    public synchronized String ledgerReport() { return ledger.report(rentals); }
+    public String ledgerReport() { return ledger.report(rentals); }
 
     private RentalRefusedException refuse(String key, String reason, String message) {
         ledger.record(Ledger.Type.REFUSE, "plate=" + key + " reason=" + reason);

@@ -20,17 +20,16 @@ public final class Report {
         }
         System.out.println("Active rentals:");
         for (Rental r : depot.activeRentals()) {
-            String name = depot.findRenter(r.renterId()).map(Renter::name).orElse("unknown");
+            Renter renter = depot.findRenter(r.renterId());
+            String name = renter == null ? "unknown" : renter.name();
             System.out.println("  Rental #" + r.id() + ": " + r.plate() + " -> " + name + " (" + r.days() + " days)");
         }
     }
 
     /** Prints money the way the original did: 450.0, 0.0, 450.5. */
     public static String money(BigDecimal amount) {
-        String s = amount.toPlainString();
+        String s = amount.stripTrailingZeros().toPlainString();
         if (!s.contains(".")) return s + ".0";
-        s = s.replaceAll("0+$", "");
-        if (s.endsWith(".")) s += "0";
         return s;
     }
 }

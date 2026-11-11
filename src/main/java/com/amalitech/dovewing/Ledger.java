@@ -21,20 +21,36 @@ public final class Ledger {
     }
 
     public List<String> entries() {
-        return entries.stream().map(Entry::line).toList();
+        List<String> lines = new ArrayList<>();
+        for (Entry e : entries) {
+            lines.add(e.line());
+        }
+        return List.copyOf(lines);
     }
 
     public int size() { return entries.size(); }
 
-    private long count(Type type) {
-        return entries.stream().filter(e -> e.type() == type).count();
+    private int count(Type type) {
+        int n = 0;
+        for (Entry e : entries) {
+            if (e.type() == type) n++;
+        }
+        return n;
+    }
+
+    private static int countRentals(List<Rental> rentals, RentalStatus status) {
+        int n = 0;
+        for (Rental r : rentals) {
+            if (r.status() == status) n++;
+        }
+        return n;
     }
 
     public String report(List<Rental> rentals) {
-        long rents = count(Type.RENT);
-        long returns = count(Type.RETURN);
-        long returned = rentals.stream().filter(r -> r.status() == RentalStatus.RETURNED).count();
-        long active = rentals.stream().filter(r -> r.status() == RentalStatus.ACTIVE).count();
+        int rents = count(Type.RENT);
+        int returns = count(Type.RETURN);
+        int returned = countRentals(rentals, RentalStatus.RETURNED);
+        int active = countRentals(rentals, RentalStatus.ACTIVE);
 
         if (rents != rentals.size()) {
             throw new IllegalStateException(
