@@ -6,22 +6,35 @@ import java.util.List;
 
 public final class Ledger {
 
-    private final List<String> entries = new ArrayList<>();
+    enum Type { RENT, RETURN, REFUSE }
 
-    void record(String event) {
-        if (event == null || event.isBlank()) throw new IllegalArgumentException("event required");
-        entries.add(Instant.now() + " " + event);
+    private record Entry(Instant at, Type type, String detail) {
+        String line() { return at + " " + type + " " + detail; }
     }
 
-    public List<String> entries() { return List.copyOf(entries); }
+    private final List<Entry> entries = new ArrayList<>();
+
+    void record(Type type, String detail) {
+        if (type == null) throw new IllegalArgumentException("type required");
+        if (detail == null || detail.isBlank()) throw new IllegalArgumentException("detail required");
+        entries.add(new Entry(Instant.now(), type, detail));
+    }
+
+    public List<String> entries() {
+        return entries.stream().map(Entry::line).toList();
+    }
 
     public int size() { return entries.size(); }
 
+    private long count(Type type) {
+        return entries.stream().filter(e -> e.type() == type).count();
+    }
+
     public String report(List<Rental> rentals) {
-        long rents = entries.stream().filter(e -> e.contains(" RENT ")).count();
-        long returns = entries.stream().filter(e -> e.contains(" RETURN ")).count();
-        long active = rentals.stream().filter(r -> r.status() == RentalStatus.ACTIVE).count();
+        long rents = count(Type.RENT);
+        long returns = count(Type.RETURN);
         long returned = rentals.stream().filter(r -> r.status() == RentalStatus.RETURNED).count();
+        long active = rentals.stream().filter(r -> r.status() == RentalStatus.ACTIVE).count();
 
         if (rents != rentals.size()) {
             throw new IllegalStateException(

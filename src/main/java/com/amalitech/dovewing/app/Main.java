@@ -1,4 +1,13 @@
-package com.amalitech.dovewing;
+package com.amalitech.dovewing.app;
+
+import com.amalitech.dovewing.Depot;
+import com.amalitech.dovewing.Economy;
+import com.amalitech.dovewing.Premium;
+import com.amalitech.dovewing.Rental;
+import com.amalitech.dovewing.RentalRefusedException;
+import com.amalitech.dovewing.Renter;
+import com.amalitech.dovewing.RenterType;
+import com.amalitech.dovewing.Vehicle;
 
 import java.math.BigDecimal;
 
@@ -22,11 +31,11 @@ public final class Main {
         tryRent(depot, kofi, vitz, 3);
         tryRent(depot, ama, prado, 2);
         tryReturn(depot, prado);
-        tryRent(depot, ama, vitz, 2);
+        tryRent(depot, ama, vitz, 2); // the Vitz is already out with Kofi: now refused
 
         System.out.println();
         System.out.println("=== Dovewing Car Rentals - end of day ===");
-        depot.printReport();
+        Report.print(depot);
         System.out.println(depot.ledgerReport());
     }
 
@@ -34,9 +43,9 @@ public final class Main {
         try {
             Rental r = depot.rent(renter.id(), vehicle.plate(), days);
             System.out.println("Rented " + vehicle.model() + " (" + vehicle.plate() + ") to " + renter.name()
-                    + " for " + r.days() + " days, cost GHS " + money(r.cost())
-                    + ", deposit GHS " + money(r.deposit()));
-        } catch (RuntimeException e) {
+                    + " for " + r.days() + " days, cost GHS " + Report.money(r.cost())
+                    + ", deposit GHS " + Report.money(r.deposit()));
+        } catch (RentalRefusedException e) {
             System.out.println(e.getMessage());
         }
     }
@@ -45,16 +54,8 @@ public final class Main {
         try {
             depot.returnVehicle(vehicle.plate());
             System.out.println("Returned " + vehicle.model() + " (" + vehicle.plate() + ")");
-        } catch (RuntimeException e) {
+        } catch (RentalRefusedException e) {
             System.out.println(e.getMessage());
         }
-    }
-
-    private static String money(BigDecimal amount) {
-        String s = amount.toPlainString();
-        if (!s.contains(".")) return s + ".0";
-        s = s.replaceAll("0+$", "");
-        if (s.endsWith(".")) s += "0";
-        return s;
     }
 }

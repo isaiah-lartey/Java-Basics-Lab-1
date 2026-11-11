@@ -5,7 +5,12 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
+/**
+ * The only class that changes rental state. Every public method takes the same lock, so the
+ * check "is it already rented?" and the change that follows cannot be split by another thread.
+ */
 public final class Depot {
 
     private final Map<String, Vehicle> fleet = new LinkedHashMap<>();
@@ -14,7 +19,7 @@ public final class Depot {
     private final Ledger ledger = new Ledger();
     private int nextRentalId = 1;
 
-    public void addVehicle(Vehicle v) {
+    public synchronized void addVehicle(Vehicle v) {
         String key = v.key();
         if (fleet.containsKey(key)) {
             throw new IllegalArgumentException("Duplicate plate: " + v.plate());
@@ -22,36 +27,32 @@ public final class Depot {
         fleet.put(key, v);
     }
 
-    public void addRenter(Renter r) {
+    public synchronized void addRenter(Renter r) {
         if (renters.containsKey(r.id())) {
             throw new IllegalArgumentException("Duplicate renter id: " + r.id());
         }
         renters.put(r.id(), r);
     }
 
-    public Rental rent(int renterId, String plate, int days) {
+    public synchronized Rental rent(int renterId, String plate, int days) throws RentalRefusedException {
         String key = Vehicle.normalise(plate);
 
         Vehicle v = fleet.get(key);
         if (v == null) {
-            ledger.record("REFUSE plate=" + key + " reason=unknown vehicle");
-            throw new IllegalArgumentException("Unknown vehicle: " + plate);
+            throw refuse(key, "unknown vehicle", "Unknown vehicle: " + plate);
         }
 
         Renter r = renters.get(renterId);
         if (r == null) {
-            ledger.record("REFUSE plate=" + key + " reason=unknown renter");
-            throw new IllegalArgumentException("Unknown renter: " + renterId);
+            throw refuse(key, "unknown renter", "Unknown renter: " + renterId);
         }
 
         if (isRented(key)) {
-            ledger.record("REFUSE plate=" + key + " reason=already rented");
-            throw new IllegalStateException("Vehicle already rented: " + v.plate());
+            throw refuse(key, "already rented", "Vehicle already rented: " + v.plate());
         }
 
         if (days < 1) {
-            ledger.record("REFUSE plate=" + key + " reason=days must be >= 1");
-            throw new IllegalArgumentException("days must be >= 1");
+            throw refuse(key, "days must be >= 1", "days must be >= 1");
         }
 
         BigDecimal cost = v.category().cost(v.rate(), days);
@@ -59,17 +60,16 @@ public final class Depot {
 
         Rental rental = new Rental(nextRentalId++, renterId, v.plate(), days, cost, deposit);
         rentals.add(rental);
-        ledger.record("RENT plate=" + key + " renter=" + renterId + " days=" + days);
+        ledger.record(Ledger.Type.RENT, "plate=" + key + " renter=" + renterId + " days=" + days);
         return rental;
     }
 
-    public void returnVehicle(String plate) {
+    public synchronized void returnVehicle(String plate) throws RentalRefusedException {
         String key = Vehicle.normalise(plate);
 
         Vehicle v = fleet.get(key);
         if (v == null) {
-            ledger.record("REFUSE plate=" + key + " reason=unknown vehicle");
-            throw new IllegalArgumentException("Unknown vehicle: " + plate);
+            throw refuse(key, "unknown vehicle", "Unknown vehicle: " + plate);
         }
 
         Rental active = rentals.stream()
@@ -78,39 +78,33 @@ public final class Depot {
             .orElse(null);
 
         if (active == null) {
-            ledger.record("REFUSE plate=" + key + " reason=not rented");
-            throw new IllegalStateException("Vehicle not rented: " + v.plate());
+            throw refuse(key, "not rented", "Vehicle not rented: " + v.plate());
         }
 
         active.markReturned();
-        ledger.record("RETURN plate=" + key);
+        ledger.record(Ledger.Type.RETURN, "plate=" + key);
     }
 
-    public boolean isRented(String plate) {
+    public synchronized boolean isRented(String plate) {
         String key = Vehicle.normalise(plate);
         return rentals.stream()
             .anyMatch(x -> x.status() == RentalStatus.ACTIVE && Vehicle.normalise(x.plate()).equals(key));
     }
 
-    public List<Rental> getRentals() { return List.copyOf(rentals); }
+    public synchronized List<Rental> getRentals() { return List.copyOf(rentals); }
 
-    public String ledgerReport() {
-        return ledger.report(rentals);
+    public synchronized List<Rental> activeRentals() {
+        return rentals.stream().filter(x -> x.status() == RentalStatus.ACTIVE).toList();
     }
 
-    public void printReport() {
-        System.out.println("Fleet status:");
-        for (Vehicle v : fleet.values()) {
-            String state = isRented(v.plate()) ? "RENTED" : "AVAILABLE";
-            System.out.println("  " + v.model() + " (" + v.plate() + ", " + v.category().name() + "): " + state);
-        }
-        System.out.println("Active rentals:");
-        for (Rental r : rentals) {
-            if (r.status() == RentalStatus.ACTIVE) {
-                Renter renter = renters.get(r.renterId());
-                String name = renter == null ? "unknown" : renter.name();
-                System.out.println("  Rental #" + r.id() + ": " + r.plate() + " -> " + name + " (" + r.days() + " days)");
-            }
-        }
+    public synchronized List<Vehicle> fleet() { return List.copyOf(fleet.values()); }
+
+    public synchronized Optional<Renter> findRenter(int id) { return Optional.ofNullable(renters.get(id)); }
+
+    public synchronized String ledgerReport() { return ledger.report(rentals); }
+
+    private RentalRefusedException refuse(String key, String reason, String message) {
+        ledger.record(Ledger.Type.REFUSE, "plate=" + key + " reason=" + reason);
+        return new RentalRefusedException(message);
     }
 }
